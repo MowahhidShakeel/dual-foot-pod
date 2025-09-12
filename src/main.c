@@ -284,116 +284,90 @@
 // }
 
 #include <zephyr/kernel.h>
-
 #include <zephyr/device.h>
-
-#include <zephyr/drivers/spi.h>
-
-#include <zephyr/drivers/gpio.h>
-
+#include <zephyr/drivers/sensor.h>
 #include <zephyr/sys/printk.h>
+#include <stdio.h>
 
-#include <zephyr/sys/util.h>
+/* Get the sensor device from the devicetree */
+static const struct device *const ism330dhcx_dev = DEVICE_DT_GET(DT_INST(0, st_ism330dhcx));
 
-#define WHO_AM_I_REG 0x0F
-
-#define WHO_AM_I_VAL_DLC 0x6A
-
-#define SPI_NODE_LABEL spi4
-
-#define CS_GPIO_LABEL gpio1
-
-#define CS_PIN 12
+static void print_sensor_value(const char *name, struct sensor_value val)
+{
+    printk("%s: %.6f\n", name, sensor_value_to_double(&val));
+}
 
 void main(void)
-
 {
-
-    const struct device *spi_dev = DEVICE_DT_GET(DT_NODELABEL(SPI_NODE_LABEL));
-
-    const struct device *cs_gpio = DEVICE_DT_GET(DT_NODELABEL(CS_GPIO_LABEL));
-
-    if (!device_is_ready(spi_dev))
-
+    // First, check if the sensor was found and is ready
+    if (!device_is_ready(ism330dhcx_dev))
     {
-
-        printk("ERROR: SPI device not ready\n");
-
+        printk("Sensor device not ready: %s\n", ism330dhcx_dev->name);
         return;
     }
 
-    if (!device_is_ready(cs_gpio))
+    printk("Found sensor: %s. Reading data...\n", ism330dhcx_dev->name);
 
+    // --- NEW: Configure the sensor ---
+    // This section activates the accelerometer and gyroscope by setting their
+    // Output Data Rate (ODR) or sampling frequency.
+
+    struct sensor_value odr_attr;
+
+    // Set accelerometer ODR to 52 Hz
+    odr_attr.val1 = 52;
+    odr_attr.val2 = 0;
+
+    if (sensor_attr_set(ism330dhcx_dev, SENSOR_CHAN_ACCEL_XYZ,
+                        SENSOR_ATTR_SAMPLING_FREQUENCY, &odr_attr) != 0)
     {
-
-        printk("ERROR: CS GPIO device not ready\n");
-
+        printk("Failed to set accelerometer ODR\n");
         return;
     }
 
-    int rc = gpio_pin_configure(cs_gpio, CS_PIN, GPIO_OUTPUT_HIGH);
-
-    if (rc)
-
+    // Set gyroscope ODR to 52 Hz
+    if (sensor_attr_set(ism330dhcx_dev, SENSOR_CHAN_GYRO_XYZ,
+                        SENSOR_ATTR_SAMPLING_FREQUENCY, &odr_attr) != 0)
     {
-
-        printk("ERROR: gpio_pin_configure failed: %d\n", rc);
-
+        printk("Failed to set gyroscope ODR\n");
         return;
     }
 
-    struct spi_config spi_cfg = {
+    printk("Sensor configured. Starting measurements...\n");
 
-        .frequency = 1000000U,
-
-        .operation = SPI_WORD_SET(8) | SPI_TRANSFER_MSB | SPI_MODE_CPOL | SPI_MODE_CPHA,
-
-        .slave = 0,
-
-        .cs = NULL, // manual CS
-
-    };
-
-    printk("Starting ISM330DLC SPI bring-up loop...\n");
-
+    // Loop forever, reading and printing data
     while (1)
-
     {
-
-        uint8_t tx[2] = {WHO_AM_I_REG | 0x80, 0x00};
-
-        uint8_t rx[2] = {0};
-
-        const struct spi_buf tx_buf = {.buf = tx, .len = sizeof(tx)};
-
-        const struct spi_buf rx_buf = {.buf = rx, .len = sizeof(rx)};
-
-        const struct spi_buf_set tx_set = {.buffers = &tx_buf, .count = 1};
-
-        const struct spi_buf_set rx_set = {.buffers = &rx_buf, .count = 1};
-
-        gpio_pin_set(cs_gpio, CS_PIN, 0); // select
-
-        rc = spi_transceive(spi_dev, &spi_cfg, &tx_set, &rx_set);
-
-        gpio_pin_set(cs_gpio, CS_PIN, 1); // deselect
-
-        if (rc)
-
+        if (sensor_sample_fetch(ism330dhcx_dev) != 0)
         {
-
-            printk("SPI transceive failed: %d\n", rc);
+            printk("Failed to fetch sensor sample\n");
+            return;
         }
 
-        else
+        struct sensor_value accel_x, accel_y, accel_z;
+        struct sensor_value gyro_x, gyro_y, gyro_z;
 
-        {
+        // Get Accelerometer Data
+        sensor_channel_get(ism330dhcx_dev, SENSOR_CHAN_ACCEL_X, &accel_x);
+        sensor_channel_get(ism330dhcx_dev, SENSOR_CHAN_ACCEL_Y, &accel_y);
+        sensor_channel_get(ism330dhcx_dev, SENSOR_CHAN_ACCEL_Z, &accel_z);
 
-            uint8_t who = rx[1];
+        // Get Gyroscope Data
+        // NOTE: The correct enums for gyroscope axes are GYRO_DX, GYRO_DY, GYRO_DZ
+        sensor_channel_get(ism330dhcx_dev, SENSOR_CHAN_GYRO_X, &gyro_x);
+        sensor_channel_get(ism330dhcx_dev, SENSOR_CHAN_GYRO_Y, &gyro_y);
+        sensor_channel_get(ism330dhcx_dev, SENSOR_CHAN_GYRO_Z, &gyro_z);
 
-            printk("WHO_AM_I = 0x%02X\n", who);
-        }
+        // Print the results
+        printk("--- New Reading ---\n");
+        print_sensor_value(" Accel X (m/s^2)", accel_x);
+        print_sensor_value(" Accel Y (m/s^2)", accel_y);
+        print_sensor_value(" Accel Z (m/s^2)", accel_z);
+        print_sensor_value(" Gyro  X (rad/s)", gyro_x);
+        print_sensor_value(" Gyro  Y (rad/s)", gyro_y);
+        print_sensor_value(" Gyro  Z (rad/s)", gyro_z);
 
-        k_sleep(K_MSEC(500)); // half second pause between reads
+        // A shorter delay is better for seeing changes in sensor data
+        k_sleep(K_MSEC(10));
     }
 }
