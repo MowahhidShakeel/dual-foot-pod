@@ -114,6 +114,12 @@ static void read_and_notify_imu(void)
     int16_t gy = scale_gyro_to_int16(&gyro[1]);
     int16_t gz = scale_gyro_to_int16(&gyro[2]);
 
+    printf(" Accel X (m/s^2): %d\n", ax);
+    printf(" Accel Y (m/s^2): %d\n", ay);
+    printf(" Accel Z (m/s^2): %d\n", az);
+    printf(" Gyro  X (rad/s): %d\n", gx);
+    printf(" Gyro  Y (rad/s): %d\n", gy);
+    printf(" Gyro  Z (rad/s): %d\n", gz);
     memcpy(&frame[8], &ax, sizeof(ax));
     memcpy(&frame[10], &ay, sizeof(ay));
     memcpy(&frame[12], &az, sizeof(az));
