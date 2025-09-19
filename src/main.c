@@ -3,15 +3,21 @@
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/sys/printk.h>
-
 #include <zephyr/bluetooth/bluetooth.h>
 #include <zephyr/bluetooth/hci.h>
-
+#include <zephyr/sys_clock.h>
 #include "imu_service.h"
 
 #define LOG_LEVEL LOG_LEVEL_INF
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(main);
+
+/* --- Sensor and Application Logic --- */
+#define IMU_FRAME_SIZE 20
+#define BATCH_SIZE 10
+static uint8_t batch_buffer[BATCH_SIZE * IMU_FRAME_SIZE];
+static int batch_index = 0;
+static uint16_t seq_id = 0;
 
 /* --- Devicetree Aliases --- */
 static const struct device *const imu_dev = DEVICE_DT_GET(DT_INST(0, st_ism330dhcx));
@@ -26,7 +32,6 @@ static const struct bt_data ad[] = {
 };
 
 /* --- Application State --- */
-// We only need two states now: IDLE and SESSION (streaming)
 enum app_state
 {
     APP_STATE_IDLE,
@@ -39,18 +44,22 @@ static struct gpio_callback button_cb_data;
 
 void button_pressed(const struct device *dev, struct gpio_callback *cb, uint32_t pins)
 {
-    // Toggle the state on each button press
     if (current_state == APP_STATE_IDLE)
     {
         current_state = APP_STATE_SESSION;
-        gpio_pin_set_dt(&led, 1); // Turn LED ON
+        gpio_pin_set_dt(&led, 1);
         LOG_INF("State -> SESSION (Streaming ON)");
     }
     else
     {
         current_state = APP_STATE_IDLE;
-        gpio_pin_set_dt(&led, 0); // Turn LED OFF
+        gpio_pin_set_dt(&led, 0);
         LOG_INF("State -> IDLE (Streaming OFF)");
+        if (batch_index > 0)
+        {
+            imu_service_notify_motion(batch_buffer, batch_index * IMU_FRAME_SIZE);
+            batch_index = 0;
+        }
     }
 }
 
@@ -75,20 +84,19 @@ static int button_init(void)
     return 0;
 }
 
-/* --- Sensor and Application Logic (mostly unchanged) --- */
-// (Helper functions scale_accel_to_int16, scale_gyro_to_int16, read_and_notify_imu, sensor_imu_init remain the same)
-#define IMU_FRAME_SIZE 22
 static int16_t scale_accel_to_int16(const struct sensor_value *val)
 {
     double scaled_val = sensor_value_to_double(val) * 1671.0;
     return CLAMP(scaled_val, INT16_MIN, INT16_MAX);
 }
+
 static int16_t scale_gyro_to_int16(const struct sensor_value *val)
 {
     double scaled_val = sensor_value_to_double(val) * 7500.0;
     return CLAMP(scaled_val, INT16_MIN, INT16_MAX);
 }
-static void read_and_notify_imu(void)
+
+static void read_and_batch_imu(void)
 {
     uint8_t frame[IMU_FRAME_SIZE] = {0};
     struct sensor_value accel[3], gyro[3];
@@ -102,11 +110,11 @@ static void read_and_notify_imu(void)
     sensor_channel_get(imu_dev, SENSOR_CHAN_ACCEL_XYZ, accel);
     sensor_channel_get(imu_dev, SENSOR_CHAN_GYRO_XYZ, gyro);
 
-    // --- FIX: Get and pack a 64-bit microsecond timestamp ---
-    uint64_t timestamp_us = k_uptime_get_32();
-    memcpy(&frame[0], &timestamp_us, sizeof(timestamp_us));
+    uint16_t current_seq_id = seq_id++;
+    uint64_t timestamp_us = k_ticks_to_us_floor64(k_uptime_ticks());
+    memcpy(&frame[0], &current_seq_id, sizeof(current_seq_id));
+    memcpy(&frame[2], &timestamp_us, sizeof(timestamp_us));
 
-    // Pack sensor data into the rest of the frame
     int16_t ax = scale_accel_to_int16(&accel[0]);
     int16_t ay = scale_accel_to_int16(&accel[1]);
     int16_t az = scale_accel_to_int16(&accel[2]);
@@ -114,21 +122,23 @@ static void read_and_notify_imu(void)
     int16_t gy = scale_gyro_to_int16(&gyro[1]);
     int16_t gz = scale_gyro_to_int16(&gyro[2]);
 
-    printf(" Accel X (m/s^2): %d\n", ax);
-    printf(" Accel Y (m/s^2): %d\n", ay);
-    printf(" Accel Z (m/s^2): %d\n", az);
-    printf(" Gyro  X (rad/s): %d\n", gx);
-    printf(" Gyro  Y (rad/s): %d\n", gy);
-    printf(" Gyro  Z (rad/s): %d\n", gz);
-    memcpy(&frame[8], &ax, sizeof(ax));
-    memcpy(&frame[10], &ay, sizeof(ay));
-    memcpy(&frame[12], &az, sizeof(az));
-    memcpy(&frame[14], &gx, sizeof(gx));
-    memcpy(&frame[16], &gy, sizeof(gy));
-    memcpy(&frame[18], &gz, sizeof(gz));
+    memcpy(&frame[10], &ax, sizeof(ax));
+    memcpy(&frame[12], &ay, sizeof(ay));
+    memcpy(&frame[14], &az, sizeof(az));
+    memcpy(&frame[16], &gx, sizeof(gx));
+    memcpy(&frame[18], &gy, sizeof(gy));
+    memcpy(&frame[20], &gz, sizeof(gz));
 
-    imu_service_notify_motion(frame, sizeof(frame));
+    memcpy(&batch_buffer[batch_index * IMU_FRAME_SIZE], frame, IMU_FRAME_SIZE);
+    batch_index++;
+
+    if (batch_index == BATCH_SIZE)
+    {
+        imu_service_notify_motion(batch_buffer, BATCH_SIZE * IMU_FRAME_SIZE);
+        batch_index = 0;
+    }
 }
+
 static int sensor_imu_init(void)
 {
     if (!device_is_ready(imu_dev))
@@ -156,7 +166,6 @@ void main(void)
     int err;
     LOG_INF("IMU BLE Simple UX Example Starting...");
 
-    // --- GPIO and Hardware Init ---
     if (!device_is_ready(led.port))
     {
         LOG_ERR("LED device not ready");
@@ -183,7 +192,6 @@ void main(void)
         return;
     }
 
-    // --- Bluetooth Init ---
     err = bt_enable(NULL);
     if (err)
     {
@@ -202,15 +210,12 @@ void main(void)
     }
     LOG_INF("Advertising started. Press button to start/stop streaming.");
 
-    // --- Main Loop ---
     while (1)
     {
-        // Target a 500 Hz polling rate
         k_sleep(K_MSEC(2));
-
         if (current_state == APP_STATE_SESSION)
         {
-            read_and_notify_imu();
+            read_and_batch_imu();
         }
     }
 }
