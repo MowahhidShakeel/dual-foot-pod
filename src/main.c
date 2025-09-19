@@ -14,18 +14,6 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(main);
 
-/* --- Devicetree Aliases --- */
-static const struct device *const imu_dev = DEVICE_DT_GET(DT_INST(0, st_ism330dhcx));
-static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
-static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(DT_ALIAS(led2), gpios);
-
-/* --- Advertising Data --- */
-static const struct bt_data ad[] = {
-    BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-    BT_DATA_BYTES(BT_DATA_UUID128_ALL,
-                  BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x1234567890ab)),
-};
-
 /* --- Sensor and Application Logic --- */
 #define IMU_FRAME_SIZE 20
 #define BATCH_SIZE 10
@@ -51,6 +39,18 @@ static int step_count = 0;
 static int64_t burst_start_time = 0;
 static int64_t cooldown_start_time = 0;
 static int post_trigger_samples_left = 0;
+
+/* --- Devicetree Aliases --- */
+static const struct device *const imu_dev = DEVICE_DT_GET(DT_INST(0, st_ism330dhcx));
+static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
+static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(DT_ALIAS(led2), gpios);
+
+/* --- Advertising Data --- */
+static const struct bt_data ad[] = {
+    BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
+    BT_DATA_BYTES(BT_DATA_UUID128_ALL,
+                  BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x1234567890ab)),
+};
 
 /* --- Application State --- */
 enum app_state
@@ -328,11 +328,18 @@ void main(void)
         LOG_ERR("Advertising failed to start (err %d)", err);
         return;
     }
-    LOG_INF("Advertising started. Short press for session, 3s press for all-day mode.");
+    LOG_INF("Advertising started. Short press for session, 3s press for all-day mode, or write to Control char.");
 
     int64_t last_budget_reset = k_uptime_get();
     while (1)
     {
+        if (current_state == APP_STATE_IDLE && imu_service_is_start_commanded())
+        {
+            current_state = APP_STATE_SESSION;
+            gpio_pin_set_dt(&led, 1);
+            LOG_INF("State -> SESSION (Host start command)");
+        }
+
         if (current_state == APP_STATE_SESSION)
         {
             set_imu_odr(520);

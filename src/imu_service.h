@@ -20,8 +20,8 @@ extern "C"
      * Returns 0 on success or a negative errno on failure.
      *
      * Frame format used by this example (packed, little-endian):
-     * [t_us:uint64_t][ax:int16][ay:int16][az:int16][gx:int16][gy:int16][gz:int16][temp:int16]
-     * => 8 + 2*7 = 22 bytes
+     * [seq_id:uint16][t_us:uint64][ax:int16][ay:int16][az:int16][gx:int16][gy:int16][gz:int16]
+     * => 2 + 8 + 2*6 = 20 bytes
      *
      * The notifier will:
      *  - check that notifications are enabled by the client,
@@ -29,5 +29,11 @@ extern "C"
      *  - retry briefly on transient -ENOMEM buffer shortage.
      */
     int imu_service_notify_motion(const void *data, uint16_t len);
+
+    /**
+     * Check if the host has sent a start command.
+     * Returns true if start command received, false otherwise.
+     */
+    bool imu_service_is_start_commanded(void);
 
 #endif /* IMU_SERVICE_H */
