@@ -1,90 +1,192 @@
-/ {
-    aliases {
-        // led0 = &led0;
-        // sw0 = &button0;
-        led2 = &led2;
-    };
+// / {
+//     chosen {
+//         nordic,pm-ext-flash = &qspi;  // Not used, but included for clarity (no external flash)
+//         zephyr,flash = &flash0;
+//         zephyr,code-partition = &slot0_partition;
+//     };
 
-    // leds {
-    //     compatible = "gpio-leds";
-    //     led0: led_0 {
-    //         gpios = <&gpio0 28 GPIO_ACTIVE_LOW>;
-    //         label = "Green LED 0";
-    //     };
-    // };
+//     /* Flash partition layout for MCUboot */
+//     flash0: flash@0 {
+//         partitions {
+//             compatible = "fixed-partitions";
+//             #address-cells = <1>;
+//             #size-cells = <1>;
 
-    leds {
-    led2: led_2 {
-        gpios = <&gpio0 30 GPIO_ACTIVE_LOW>;
-        label = "Green LED 2";
-    };
+//             /* Bootloader partition */
+//             boot_partition: partition@0 {
+//                 label = "mcuboot";
+//                 reg = <0x0 0x10000>; /* 64 KB for MCUboot */
+//                 read-only;
+//             };
 
-    // buttons {
-    //     compatible = "gpio-keys";
-    //     button0: button_0 {
-    //         gpios = <&gpio0 23 GPIO_ACTIVE_LOW>;
-    //         label = "Button 0";
-    //     };
-    // };
-};
+//             /* Primary image slot */
+//             slot0_partition: partition@10000 {
+//                 label = "image-0";
+//                 reg = <0x10000 0x6e000>; /* 440 KB for primary image */
+//             };
 
+//             /* Secondary image slot for DFU */
+//             slot1_partition: partition@7e000 {
+//                 label = "image-1";
+//                 reg = <0x7e000 0x6e000>; /* 440 KB for secondary image */
+//             };
 
-/* Add this definition for LED2 */
+//             /* Scratch partition for MCUboot swap */
+//             scratch_partition: partition@ec000 {
+//                 label = "image-scratch";
+//                 reg = <0xec000 0x10000>; /* 64 KB for scratch */
+//             };
 
-};
-// &spi4 {
-//     compatible = "nordic,nrf-spim";
-//     status = "okay";
-//     cs-gpios = <&gpio1 12 GPIO_ACTIVE_LOW>;  /* Chip Select pin P1.12 */
-
-//     ism330dhcx@0 {
-//         compatible = "st,ism330dhcx";
-//         reg = <0>;                        /* CS index */
-//         spi-max-frequency = <10000000>;   /* 10 MHz  */
-//         label = "ISM330DHCX";
+//             /* NVS storage for calibration and settings */
+//             storage_partition: partition@fc000 {
+//                 label = "storage";
+//                 reg = <0xfc000 0x4000>; /* 16 KB for NVS */
+//             };
+//         };
 //     };
 // };
+
+// / {
+//     aliases {
+//         // led0 = &led0;
+//         // sw0 = &button0;
+//         led2 = &led2;
+//     };
+
+//     // leds {
+//     //     compatible = "gpio-leds";
+//     //     led0: led_0 {
+//     //         gpios = <&gpio0 28 GPIO_ACTIVE_LOW>;
+//     //         label = "Green LED 0";
+//     //     };
+//     // };
+
+//     leds {
+//     led2: led_2 {
+//         gpios = <&gpio0 30 GPIO_ACTIVE_LOW>;
+//         label = "Green LED 2";
+//     };
+
+//     // buttons {
+//     //     compatible = "gpio-keys";
+//     //     button0: button_0 {
+//     //         gpios = <&gpio0 23 GPIO_ACTIVE_LOW>;
+//     //         label = "Button 0";
+//     //     };
+//     // };
+// };
+
+
+// /* Add this definition for LED2 */
+
+// };
+// // &spi4 {
+// //     compatible = "nordic,nrf-spim";
+// //     status = "okay";
+// //     cs-gpios = <&gpio1 12 GPIO_ACTIVE_LOW>;  /* Chip Select pin P1.12 */
+
+// //     ism330dhcx@0 {
+// //         compatible = "st,ism330dhcx";
+// //         reg = <0>;                        /* CS index */
+// //         spi-max-frequency = <10000000>;   /* 10 MHz  */
+// //         label = "ISM330DHCX";
+// //     };
+// // };
+// &spi4 {
+//     status = "okay";
+//     pinctrl-0 = <&spi4_default>;
+//     pinctrl-1 = <&spi4_sleep>;
+//     pinctrl-names = "default", "sleep";
+
+//     /* * THE FIX: The cs-gpios property belongs to the SPI controller itself.
+//      * This tells spi4 that it is in charge of toggling this pin.
+//      */
+//     cs-gpios = <&gpio1 12 GPIO_ACTIVE_LOW>;
+
+//     /* This is the node for your sensor */
+//     ism330dlc: ism330dhcx@0 {
+//         compatible = "st,ism330dhcx";
+//         /* * The reg = <0> property now links this device to the 
+//          * first (index 0) chip select pin defined in the parent's
+//          * cs-gpios property above.
+//          */
+//         reg = <0>; 
+//         spi-max-frequency = <1000000>;
+//     };
+// };
+
+// /* Your pinctrl node remains the same */
+// &pinctrl {
+// 	spi4_default: spi4_default {
+// 		group1 {
+// 			psels = <NRF_PSEL(SPIM_SCK, 1, 15)>,
+// 					<NRF_PSEL(SPIM_MOSI, 1, 13)>,
+// 					<NRF_PSEL(SPIM_MISO, 1, 14)>;
+// 		};
+// 	};
+
+// 	spi4_sleep: spi4_sleep {
+// 		group1 {
+// 			psels = <NRF_PSEL(SPIM_SCK, 1, 15)>,
+// 					<NRF_PSEL(SPIM_MOSI, 1, 13)>,
+// 					<NRF_PSEL(SPIM_MISO, 1, 14)>;
+// 			low-power-enable;
+// 		};
+// 	};
+// };
+
+/ {
+    aliases {
+        led2 = &led2;
+        sw0 = &button0;
+    };
+
+    leds {
+        compatible = "gpio-leds";
+        led2: led_2 {
+            gpios = <&gpio0 30 GPIO_ACTIVE_LOW>;
+            label = "Green LED 2";
+        };
+    };
+
+    buttons {
+        compatible = "gpio-keys";
+        button0: button_0 {
+            gpios = <&gpio0 23 GPIO_ACTIVE_LOW>;
+            label = "Button 0";
+        };
+    };
+};
+
 &spi4 {
     status = "okay";
     pinctrl-0 = <&spi4_default>;
     pinctrl-1 = <&spi4_sleep>;
     pinctrl-names = "default", "sleep";
-
-    /* * THE FIX: The cs-gpios property belongs to the SPI controller itself.
-     * This tells spi4 that it is in charge of toggling this pin.
-     */
     cs-gpios = <&gpio1 12 GPIO_ACTIVE_LOW>;
 
-    /* This is the node for your sensor */
     ism330dlc: ism330dhcx@0 {
         compatible = "st,ism330dhcx";
-        /* * The reg = <0> property now links this device to the 
-         * first (index 0) chip select pin defined in the parent's
-         * cs-gpios property above.
-         */
-        reg = <0>; 
+        reg = <0>;
         spi-max-frequency = <1000000>;
     };
 };
 
-/* Your pinctrl node remains the same */
 &pinctrl {
-	spi4_default: spi4_default {
-		group1 {
-			psels = <NRF_PSEL(SPIM_SCK, 1, 15)>,
-					<NRF_PSEL(SPIM_MOSI, 1, 13)>,
-					<NRF_PSEL(SPIM_MISO, 1, 14)>;
-		};
-	};
+    spi4_default: spi4_default {
+        group1 {
+            psels = <NRF_PSEL(SPIM_SCK, 1, 15)>,
+                    <NRF_PSEL(SPIM_MOSI, 1, 13)>,
+                    <NRF_PSEL(SPIM_MISO, 1, 14)>;
+        };
+    };
 
-	spi4_sleep: spi4_sleep {
-		group1 {
-			psels = <NRF_PSEL(SPIM_SCK, 1, 15)>,
-					<NRF_PSEL(SPIM_MOSI, 1, 13)>,
-					<NRF_PSEL(SPIM_MISO, 1, 14)>;
-			low-power-enable;
-		};
-	};
+    spi4_sleep: spi4_sleep {
+        group1 {
+            psels = <NRF_PSEL(SPIM_SCK, 1, 15)>,
+                    <NRF_PSEL(SPIM_MOSI, 1, 13)>,
+                    <NRF_PSEL(SPIM_MISO, 1, 14)>;
+            low-power-enable;
+        };
+    };
 };
-
-/* Add this alias for LED2 */
