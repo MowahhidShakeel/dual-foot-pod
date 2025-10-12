@@ -20,8 +20,8 @@ extern "C"
      * Returns 0 on success or a negative errno on failure.
      *
      * Frame format used by this example (packed, little-endian):
-     * [seq_id:uint16][t_us:uint64][ax:int16][ay:int16][az:int16][gx:int16][gy:int16][gz:int16]
-     * => 2 + 8 + 2*6 = 20 bytes
+     * [seq_id:uint16][t_us:uint64][ax:int16][ay:int16][az:int16][gx:int16][gy:int16][gz:int16][temp:int16]
+     * => 2 + 8 + 2*7 = 24 bytes
      *
      * The notifier will:
      *  - check that notifications are enabled by the client,

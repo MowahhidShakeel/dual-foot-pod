@@ -1,5 +1,7 @@
 #include <zephyr/kernel.h>
+#include <zephyr/drivers/spi.h>
 #include <zephyr/device.h>
+#include <zephyr/devicetree.h>
 #include <zephyr/drivers/sensor.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/sys/printk.h>
@@ -14,8 +16,14 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(main);
 
+/* SPI specification for ISM330DLC */
+static const struct spi_dt_spec imu_spi_spec = SPI_DT_SPEC_GET(DT_NODELABEL(ism330dlc),
+                                                               SPI_WORD_SET(8) | SPI_TRANSFER_MSB,
+                                                               0);
+
+
 /* --- Sensor and Application Logic --- */
-#define IMU_FRAME_SIZE 20
+#define IMU_FRAME_SIZE 24
 #define BATCH_SIZE 10
 #define PRE_TRIGGER_SAMPLES 26    // 1 s at 26 Hz
 #define POST_TRIGGER_SAMPLES 2000 // 4 s at 500 Hz
@@ -41,7 +49,7 @@ static int64_t cooldown_start_time = 0;
 static int post_trigger_samples_left = 0;
 
 /* --- Devicetree Aliases --- */
-static const struct device *const imu_dev = DEVICE_DT_GET(DT_INST(0, st_ism330dhcx));
+static const struct device *const imu_dev = DEVICE_DT_GET(DT_NODELABEL(ism330dlc));
 static const struct gpio_dt_spec button = GPIO_DT_SPEC_GET(DT_ALIAS(sw0), gpios);
 static const struct gpio_dt_spec led = GPIO_DT_SPEC_GET(DT_ALIAS(led2), gpios);
 
@@ -154,10 +162,78 @@ static int16_t scale_gyro_to_int16(const struct sensor_value *val)
     return CLAMP(scaled_val, INT16_MIN, INT16_MAX);
 }
 
+static void log_imu_frame(const uint8_t *frame)
+{
+    uint16_t seq_id;
+    uint64_t timestamp_us;
+    int16_t ax, ay, az, gx, gy, gz, temp_centi;
+
+    memcpy(&seq_id, &frame[0], sizeof(seq_id));
+    memcpy(&timestamp_us, &frame[2], sizeof(timestamp_us));
+    memcpy(&ax, &frame[10], sizeof(ax));
+    memcpy(&ay, &frame[12], sizeof(ay));
+    memcpy(&az, &frame[14], sizeof(az));
+    memcpy(&gx, &frame[16], sizeof(gx));
+    memcpy(&gy, &frame[18], sizeof(gy));
+    memcpy(&gz, &frame[20], sizeof(gz));
+    memcpy(&temp_centi, &frame[22], sizeof(temp_centi)); 
+
+    LOG_INF("Frame Seq=%u Time=%llu us", seq_id, timestamp_us);
+    LOG_INF("Accel[g*1671]= X:%d Y:%d Z:%d", ax, ay, az);
+    LOG_INF("Gyro[*7500]= X:%d Y:%d Z:%d", gx, gy, gz);
+    LOG_INF("Temp[°C*100]= %d (%.2f °C)", temp_centi, temp_centi / 100.0);
+
+    // Also show raw hex bytes for BLE payload
+    char hex[IMU_FRAME_SIZE * 3 + 1];
+    for (int i = 0; i < IMU_FRAME_SIZE; i++)
+        sprintf(&hex[i * 3], "%02X ", frame[i]);
+    hex[IMU_FRAME_SIZE * 3] = '\0';
+    LOG_INF("Raw BLE frame: %s", hex);
+}
+
+/**
+ * Read the temperature from the IMU via SPI and return it as °C * 100.
+ * According to datasheet: T(°C) = 25 + (TEMP_OUT / 16)
+ */
+static int16_t read_imu_temperature(void) {
+    if (!device_is_ready(imu_spi_spec.bus)) {
+        LOG_ERR("SPI bus not ready");
+        return INT16_MIN;
+    }
+
+    // Prepare TX to read from OUT_TEMP_L and OUT_TEMP_H (auto-increment)
+    // For SPI, set MSB of reg address for read; 
+    // if auto-inc needed, set the auto-increment bit (usually bit 7 or such) 
+    uint8_t tx_buf[3] = {0x20 | 0x80, 0x00, 0x00};
+    uint8_t rx_buf[3] = {0};
+
+    const struct spi_buf tx = {.buf = tx_buf, .len = sizeof(tx_buf)};
+    const struct spi_buf rx = {.buf = rx_buf, .len = sizeof(rx_buf)};
+    const struct spi_buf_set tx_set = {.buffers = &tx, .count = 1};
+    const struct spi_buf_set rx_set = {.buffers = &rx, .count = 1};
+
+    int ret = spi_transceive_dt(&imu_spi_spec, &tx_set, &rx_set);
+    if (ret < 0) {
+        LOG_ERR("Failed temp SPI read (err %d)", ret);
+        return INT16_MIN;
+    }
+
+    // rx_buf[1] holds OUT_TEMP_L, rx_buf[2] OUT_TEMP_H
+    uint16_t raw_u = (uint16_t)((rx_buf[2] << 8) | rx_buf[1]);
+    int16_t raw = (int16_t)raw_u;  // interpret as signed
+
+    // Convert per datasheet
+    float temp_c = 25.0f + ((float)raw / 256.0f);
+    int16_t temp_centi = (int16_t)(temp_c * 100.0f);
+
+    return temp_centi;
+}
+
 static void read_and_process_imu(bool high_freq)
 {
     uint8_t frame[IMU_FRAME_SIZE] = {0};
     struct sensor_value accel[3], gyro[3];
+    int16_t temp_cx100;
 
     if (sensor_sample_fetch(imu_dev) < 0)
     {
@@ -167,6 +243,8 @@ static void read_and_process_imu(bool high_freq)
 
     sensor_channel_get(imu_dev, SENSOR_CHAN_ACCEL_XYZ, accel);
     sensor_channel_get(imu_dev, SENSOR_CHAN_GYRO_XYZ, gyro);
+    
+    temp_cx100 = read_imu_temperature();
 
     uint16_t current_seq_id = seq_id++;
     uint64_t timestamp_us = k_ticks_to_us_floor64(k_uptime_ticks());
@@ -186,6 +264,7 @@ static void read_and_process_imu(bool high_freq)
     memcpy(&frame[16], &gx, sizeof(gx));
     memcpy(&frame[18], &gy, sizeof(gy));
     memcpy(&frame[20], &gz, sizeof(gz));
+    memcpy(&frame[22], &temp_cx100, sizeof(temp_cx100));
 
     if (high_freq)
     {
@@ -205,6 +284,7 @@ static void read_and_process_imu(bool high_freq)
             uint8_t temp[IMU_FRAME_SIZE];
             ring_buf_get(&pre_trigger_rb, temp, IMU_FRAME_SIZE);
         }
+        log_imu_frame(frame);
         imu_service_notify_motion(frame, IMU_FRAME_SIZE); // Single sample for low freq
     }
 
