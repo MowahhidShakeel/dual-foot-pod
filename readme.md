@@ -1,4 +1,4 @@
-# M3 Test Package – Dual Footpod Demo (nRF5340, NCS 2.9.1)
+# Dual Footpod (nRF5340, NCS 2.9.1)
 
 ## Overview
 This firmware runs on a single nRF5340 (Raytac MDBT53-1M, ISM330DHCX IMU) to demo **Session Mode** (500 Hz streaming) and **All-Day Auto-Burst Mode** (26 Hz with 500 Hz bursts on step detection). Data is sent via BLE, with packets including sequence IDs and timestamps for future dual-pod sync. Use nRF Connect for Mobile to log data and a Python script to convert logs to CSV.
